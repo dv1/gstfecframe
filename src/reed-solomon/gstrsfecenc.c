@@ -147,6 +147,7 @@ static gboolean gst_rs_fec_enc_configure_fec(GstRSFECEnc *rs_fec_enc, gsize symb
 
 static void gst_rs_fec_enc_insert_adu(GstRSFECEnc *rs_fec_enc, GstBuffer *adu, guint esi);
 static GstFlowReturn gst_rs_fec_enc_push_adu(GstRSFECEnc *rs_fec_enc, GstBuffer *adu, guint esi);
+static void gst_rs_fec_enc_push_events(GstRSFECEnc *rs_fec_enc);
 static void gst_rs_fec_enc_flush_all_adus(GstRSFECEnc *rs_fec_enc);
 static void gst_rs_fec_enc_flush_all_fec_repair_packets(GstRSFECEnc *rs_fec_enc);
 static void gst_rs_fec_enc_free_payload_id(gpointer data);
@@ -842,6 +843,9 @@ static GstFlowReturn gst_rs_fec_enc_push_adu(GstRSFECEnc *rs_fec_enc, GstBuffer 
 	GST_BUFFER_OFFSET(fec_source_packet) = -1;
 	GST_BUFFER_OFFSET_END(fec_source_packet) = -1;
 
+	/* Push STREAM_START, CAPS, SEGMENT events if necessary */
+	gst_rs_fec_enc_push_events(rs_fec_enc);
+
 	/* Send out the FEC source packet */
 	ret = gst_pad_push(rs_fec_enc->fecsourcepad, fec_source_packet);
 
@@ -849,6 +853,76 @@ static GstFlowReturn gst_rs_fec_enc_push_adu(GstRSFECEnc *rs_fec_enc, GstBuffer 
 		GST_DEBUG_OBJECT(rs_fec_enc, "got return value %s while pushing", gst_flow_get_name(ret));
 
 	return ret;
+}
+
+
+static void gst_rs_fec_enc_push_events(GstRSFECEnc *rs_fec_enc)
+{
+	if (!rs_fec_enc->segment_started)
+	{
+		GstEvent *event;
+		GstCaps *caps;
+		GstSegment segment;
+		gchar *stream_id;
+		guint group_id;
+
+		group_id = gst_util_group_id_next();
+		gst_segment_init(&segment, GST_FORMAT_BYTES);
+
+		if (rs_fec_enc->stream_started)
+			GST_DEBUG_OBJECT(rs_fec_enc, "pushing SEGMENT and CAPS events downstream");
+		else
+			GST_DEBUG_OBJECT(rs_fec_enc, "pushing STREAM_START, SEGMENT, and CAPS events downstream (stream-start group id: %u)", group_id);
+
+		/* push stream start, caps, segment events for source pad */
+		{
+			if (!rs_fec_enc->stream_started)
+			{
+				/* stream start */
+				stream_id = gst_pad_create_stream_id(rs_fec_enc->fecsourcepad, GST_ELEMENT_CAST(rs_fec_enc), "fecsource");
+				event = gst_event_new_stream_start(stream_id);
+				gst_event_set_group_id(event, group_id);
+				gst_pad_push_event(rs_fec_enc->fecsourcepad, event);
+				g_free(stream_id);
+
+				/* caps */
+				caps = gst_caps_from_string(FEC_SOURCE_CAPS_STR);
+				event = gst_event_new_caps(caps);
+				gst_pad_push_event(rs_fec_enc->fecsourcepad, event);
+				gst_caps_unref(caps);
+			}
+
+			/* segment */
+			event = gst_event_new_segment(&segment);
+			gst_pad_push_event(rs_fec_enc->fecsourcepad, event);
+		}
+
+		/* push stream start, caps, segment events for repair pad */
+		{
+			if (!rs_fec_enc->stream_started)
+			{
+				/* stream start */
+				stream_id = gst_pad_create_stream_id(rs_fec_enc->fecrepairpad, GST_ELEMENT_CAST(rs_fec_enc), "fecrepair");
+				event = gst_event_new_stream_start(stream_id);
+				gst_event_set_group_id(event, group_id);
+				gst_pad_push_event(rs_fec_enc->fecrepairpad, event);
+				g_free(stream_id);
+
+				/* caps */
+				caps = gst_caps_from_string(FEC_REPAIR_CAPS_STR);
+				event = gst_event_new_caps(caps);
+				gst_pad_push_event(rs_fec_enc->fecrepairpad, event);
+				gst_caps_unref(caps);
+			}
+
+			/* segment */
+			event = gst_event_new_segment(&segment);
+			gst_pad_push_event(rs_fec_enc->fecrepairpad, event);
+		}
+
+		rs_fec_enc->segment_started = TRUE;
+		rs_fec_enc->stream_started = TRUE;
+	}
 }
 
 
@@ -1005,71 +1079,7 @@ static GstFlowReturn gst_rs_fec_enc_process_source_block(GstRSFECEnc *rs_fec_enc
 	}
 
 	/* Push STREAM_START, CAPS, SEGMENT events if necessary */
-	if (!rs_fec_enc->segment_started)
-	{
-		GstEvent *event;
-		GstCaps *caps;
-		GstSegment segment;
-		gchar *stream_id;
-		guint group_id;
-
-		group_id = gst_util_group_id_next();
-		gst_segment_init(&segment, GST_FORMAT_BYTES);
-
-		if (rs_fec_enc->stream_started)
-			GST_DEBUG_OBJECT(rs_fec_enc, "pushing SEGMENT and CAPS events downstream");
-		else
-			GST_DEBUG_OBJECT(rs_fec_enc, "pushing STREAM_START, SEGMENT, and CAPS events downstream (stream-start group id: %u)", group_id);
-
-		/* push stream start, caps, segment events for source pad */
-		{
-			if (!rs_fec_enc->stream_started)
-			{
-				/* stream start */
-				stream_id = gst_pad_create_stream_id(rs_fec_enc->fecsourcepad, GST_ELEMENT_CAST(rs_fec_enc), "fecsource");
-				event = gst_event_new_stream_start(stream_id);
-				gst_event_set_group_id(event, group_id);
-				gst_pad_push_event(rs_fec_enc->fecsourcepad, event);
-				g_free(stream_id);
-
-				/* caps */
-				caps = gst_caps_from_string(FEC_SOURCE_CAPS_STR);
-				event = gst_event_new_caps(caps);
-				gst_pad_push_event(rs_fec_enc->fecsourcepad, event);
-				gst_caps_unref(caps);
-			}
-
-			/* segment */
-			event = gst_event_new_segment(&segment);
-			gst_pad_push_event(rs_fec_enc->fecsourcepad, event);
-		}
-
-		/* push stream start, caps, segment events for repair pad */
-		{
-			if (!rs_fec_enc->stream_started)
-			{
-				/* stream start */
-				stream_id = gst_pad_create_stream_id(rs_fec_enc->fecrepairpad, GST_ELEMENT_CAST(rs_fec_enc), "fecrepair");
-				event = gst_event_new_stream_start(stream_id);
-				gst_event_set_group_id(event, group_id);
-				gst_pad_push_event(rs_fec_enc->fecrepairpad, event);
-				g_free(stream_id);
-
-				/* caps */
-				caps = gst_caps_from_string(FEC_REPAIR_CAPS_STR);
-				event = gst_event_new_caps(caps);
-				gst_pad_push_event(rs_fec_enc->fecrepairpad, event);
-				gst_caps_unref(caps);
-			}
-
-			/* segment */
-			event = gst_event_new_segment(&segment);
-			gst_pad_push_event(rs_fec_enc->fecrepairpad, event);
-		}
-
-		rs_fec_enc->segment_started = TRUE;
-		rs_fec_enc->stream_started = TRUE;
-	}
+	gst_rs_fec_enc_push_events(rs_fec_enc);
 
 	/* Allocate buffers for the FEC repair packets */
 	for (i = 0; i < rs_fec_enc->num_repair_symbols; ++i)

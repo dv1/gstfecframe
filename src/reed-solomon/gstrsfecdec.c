@@ -1330,10 +1330,6 @@ static GstFlowReturn gst_rs_fec_dec_push_source_block(GstRSFECDec *rs_fec_dec, G
 	GstFlowReturn ret = GST_FLOW_OK;
 	gboolean push_adus = TRUE;
 
-	/* Send stream-start and segment events if necessary */
-	gst_rs_fec_dec_push_stream_start(rs_fec_dec);
-	gst_rs_fec_dec_push_segment(rs_fec_dec);
-
 	for (esi = 0; esi < rs_fec_dec->num_source_symbols; ++esi)
 	{
 		GstBuffer *adu = source_block->output_adu_table[esi];
@@ -1606,6 +1602,10 @@ static void gst_rs_fec_dec_flush(GstRSFECDec *rs_fec_dec)
 
 static GstFlowReturn gst_rs_fec_dec_push_adu(GstRSFECDec *rs_fec_dec, GstBuffer *adu)
 {
+	/* Send stream-start and segment events if necessary */
+	gst_rs_fec_dec_push_stream_start(rs_fec_dec);
+	gst_rs_fec_dec_push_segment(rs_fec_dec);
+
 	if (rs_fec_dec->do_timestamp)
 	{
 		/* Fetch clock and base time, to be able to set buffer timestamps */
